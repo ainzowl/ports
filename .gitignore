@@ -1,0 +1,21 @@
+# Build output
+build/bin/
+
+# Node
+node_modules/
+frontend/dist/
+frontend/wailsjs/
+frontend/package.json.md5
+
+# Go
+*.exe
+*.exe~
+*.test
+*.out
+
+# Wails debug
+build/bin/
+
+# OS / editor noise
+.DS_Store
+Thumbs.db

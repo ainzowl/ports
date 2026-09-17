@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
@@ -91,9 +92,19 @@ func (a *App) ListPorts() ([]PortProcess, error) {
 }
 
 func (a *App) KillProcess(source, distro string, pid int) error {
+	if source == "docker" {
+		return fmt.Errorf("use stop container for docker workloads")
+	}
 	ctx, cancel := context.WithTimeout(a.ctx, 20*time.Second)
 	defer cancel()
 	return killProcess(ctx, source, distro, pid)
+}
+
+// StopContainer gracefully stops a docker container by ID.
+func (a *App) StopContainer(id string) error {
+	ctx, cancel := context.WithTimeout(a.ctx, 60*time.Second)
+	defer cancel()
+	return dockerStop(ctx, id)
 }
 
 func (a *App) OpenFolder(source, distro, path string) error {

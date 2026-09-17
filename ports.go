@@ -34,6 +34,11 @@ type PortProcess struct {
 	Distro string `json:"distro,omitempty"`
 	Path   string `json:"path,omitempty"`
 	Ports  []Port `json:"ports"`
+
+	// Docker container info (Source == "docker").
+	Image       string `json:"image,omitempty"`
+	State       string `json:"state,omitempty"`
+	ContainerID string `json:"containerId,omitempty"`
 }
 
 func runOut(ctx context.Context, name string, args ...string) ([]byte, error) {
@@ -57,6 +62,21 @@ func listAll(ctx context.Context) []PortProcess {
 	for _, d := range wslRunningDistros(ctx) {
 		rows = append(rows, wslPortProcesses(ctx, d)...)
 	}
+	// Replace Docker/WSL proxy rows with one row per running container. Runs
+	// after all sources are collected so compose-published ports on either
+	// side (Windows or WSL) resolve to the container.
+	rows = mergeDockerContainers(ctx, rows)
+	// Hide leftover infrastructure relays (wslrelay, dockerd, ...). Rows that
+	// were converted to containers are already renamed, so they survive.
+	kept := rows[:0]
+	for _, r := range rows {
+		base := strings.TrimSuffix(strings.ToLower(r.Name), ".exe")
+		if r.Source != "docker" && (wslInfraNames[base] || dockerInfraNames[base]) {
+			continue
+		}
+		kept = append(kept, r)
+	}
+	rows = kept
 	sort.Slice(rows, func(i, j int) bool {
 		if rows[i].Source != rows[j].Source {
 			return rows[i].Source < rows[j].Source
@@ -118,10 +138,6 @@ func windowsPortProcesses(ctx context.Context) []PortProcess {
 				continue
 			}
 			name := names[pid]
-			base := strings.TrimSuffix(name, ".exe")
-			if wslInfraNames[strings.ToLower(base)] {
-				continue
-			}
 			if name == "" {
 				name = fmt.Sprintf("PID %d", pid)
 			}

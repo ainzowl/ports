@@ -2,7 +2,7 @@ import './style.css';
 import './app.css';
 
 import iconUrl from './assets/images/icon.png';
-import { ListPorts, KillProcess, OpenFolder, GetSettings, SaveSettings, CloseWindow, StartHidden } from '../wailsjs/go/main/App';
+import { ListPorts, KillProcess, OpenFolder, GetSettings, SaveSettings, CloseWindow, StartHidden, StopContainer } from '../wailsjs/go/main/App';
 import { WindowToggleMaximise } from '../wailsjs/runtime/runtime';
 
 const state = {
@@ -15,6 +15,7 @@ const state = {
   showPaths: true,
   showSystem: true,
   killing: new Set(),
+  stopping: new Set(),
   collapsed: new Set(),
   lastUpdated: null,
   modal: null,
@@ -28,8 +29,8 @@ app.innerHTML = `
   <div class="wrap">
     <div class="titlebar" id="titlebar">
       <div class="tb-left">
-        <img class="tb-icon" src="${iconUrl}" alt="" draggable="false"/>
-        <span class="tb-title">Ports</span>
+        <span class="tb-prompt">&gt;_</span>
+        <span class="tb-title">PORTS</span>
       </div>
       <div class="tb-center" id="tbStatus"></div>
       <div class="tb-right">
@@ -50,8 +51,9 @@ app.innerHTML = `
         </div>
         <div class="chips" id="chips">
           <button class="chip active" data-src="all">All</button>
-          <button class="chip" data-src="windows">Windows</button>
+          <button class="chip" data-src="windows">Win</button>
           <button class="chip" data-src="wsl">WSL</button>
+          <button class="chip" data-src="docker">Docker</button>
         </div>
         <div class="spacer"></div>
         <button id="autoBtn" class="btn ghost toggle" title="Toggle auto refresh">Auto</button>
@@ -69,8 +71,8 @@ app.innerHTML = `
       <div id="list" class="list"></div>
       <div id="empty" class="empty hidden">
         <div class="empty-ring"></div>
-        <div>No processes listening on ports</div>
-        <div class="empty-sub">Press Refresh to scan again</div>
+        <div>no processes listening on ports</div>
+        <div class="empty-sub">press refresh to scan again</div>
       </div>
     </main>
 
@@ -81,7 +83,7 @@ app.innerHTML = `
   </div>
 
   <div id="modalBack" class="modal-back hidden">
-    <div class="modal" id="modalSettings">
+    <div class="modal brackets" id="modalSettings">
       <div class="modal-head">
         <h2>Settings</h2>
         <button class="tb-btn" data-close><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg></button>
@@ -122,11 +124,11 @@ app.innerHTML = `
       </div>
     </div>
 
-    <div class="modal about" id="modalAbout">
+    <div class="modal about brackets" id="modalAbout">
       <img class="about-icon-img" src="${iconUrl}" alt="" draggable="false"/>
-      <h2>Ports</h2>
-      <div class="about-ver">v1.0.0</div>
-      <p class="about-desc">See every app holding a port on Windows and WSL, and kill it in one click.</p>
+      <h2>PORTS</h2>
+      <div class="about-ver">1.0.0 // port recon &amp; terminate</div>
+      <p class="about-desc">see every app holding a port on windows and wsl, and kill it in one click.</p>
       <div class="about-creator">
         <div class="made-by">Made by</div>
         <div class="creator-name">Ainz</div>
@@ -135,7 +137,7 @@ app.innerHTML = `
       <button class="btn" data-close style="margin-top:18px">Close</button>
     </div>
 
-    <div class="modal confirm" id="modalConfirm">
+    <div class="modal confirm brackets" id="modalConfirm">
       <div class="confirm-icon">&#9888;</div>
       <h2 id="confirmTitle">Kill process?</h2>
       <p class="confirm-desc" id="confirmText"></p>
@@ -145,7 +147,7 @@ app.innerHTML = `
       </div>
     </div>
 
-    <div class="modal confirm" id="modalClose">
+    <div class="modal confirm brackets" id="modalClose">
       <div class="confirm-icon neutral">&#9635;</div>
       <h2>Close Ports?</h2>
       <p class="confirm-desc">Ports can keep running in the system tray so you can kill processes anytime, or exit completely.</p>
@@ -234,6 +236,9 @@ function groups() {
         source: r.source,
         distro: r.distro || '',
         path: r.path || '',
+        image: r.image || '',
+        state: r.state || '',
+        containerId: r.containerId || '',
         pids: [],
         ports: [],
       });
@@ -260,23 +265,36 @@ function render() {
   listEl.innerHTML = gs.map(g => {
     const collapsed = state.collapsed.has(g.key);
     const busy = g.pids.some(pid => state.killing.has(`${g.source}|${g.distro}|${pid}`));
-    const srcBadge = g.source === 'wsl'
-      ? `<span class="badge wsl">WSL</span>${g.distro ? `<span class="distro">${esc(g.distro)}</span>` : ''}`
-      : `<span class="badge win">Windows</span>`;
+    const stopping = g.source === 'docker' && state.stopping.has(g.key);
+    const isDocker = g.source === 'docker';
+    const srcBadge = isDocker
+      ? `<span class="badge docker">docker</span>${g.distro ? `<span class="distro">${esc(g.distro)}</span>` : ''}`
+      : g.source === 'wsl'
+      ? `<span class="badge wsl">wsl</span>${g.distro ? `<span class="distro">${esc(g.distro)}</span>` : ''}`
+      : `<span class="badge win">win</span>`;
     const ports = g.ports.slice(0, 10).map(portChip).join('');
     const more = g.ports.length > 10 ? `<span class="port more">+${g.ports.length - 10}</span>` : '';
-    const pidLabel = g.pids.length === 1 ? `PID ${g.pids[0]}` : `${g.pids.length} processes`;
-    const pathCell = state.showPaths
+    const pidLabel = isDocker
+      ? `ctr ${g.containerId ? g.containerId.slice(0, 12) : '?'} // ${g.state || 'running'}`
+      : g.pids.length === 1 ? `pid ${g.pids[0]}` : `${g.pids.length} processes`;
+    const pathCell = isDocker
+      ? `<span class="path" title="docker://${esc(g.containerId || '')} image: ${esc(g.image || '')}">docker://${esc((g.containerId || '').slice(0, 12))} // ${esc(g.image || '')}</span>`
+      : state.showPaths
       ? (g.path
           ? `<span class="path" title="${esc(g.path)}">${esc(shortPath(g.path))}</span>`
           : `<span class="path none">unknown</span>`)
       : '';
-    const folderBtn = g.path ? `<button class="btn icon" data-folder="${esc(g.key)}" title="Open containing folder"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></button>` : '';
+    const folderBtn = isDocker
+      ? `<button class="btn icon" data-folder="${esc(g.key)}" title="Open in Docker Desktop"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></button>`
+      : g.path ? `<button class="btn icon" data-folder="${esc(g.key)}" title="Open containing folder"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></button>` : '';
+    const actionBtn = isDocker
+      ? `<button class="btn kill" data-stop="${esc(g.key)}" ${stopping ? 'disabled' : ''}>${stopping ? 'stopping...' : 'stop'}</button>`
+      : `<button class="btn kill" data-kill="${esc(g.key)}" ${busy ? 'disabled' : ''}>${busy ? 'killing...' : 'kill'}</button>`;
     return `
-      <div class="group ${collapsed ? 'collapsed' : ''}" data-key="${esc(g.key)}">
+      <div class="group brackets ${collapsed ? 'collapsed' : ''} ${isDocker ? 'docker-group' : ''}" data-key="${esc(g.key)}">
         <div class="row group-head" data-toggle="${esc(g.key)}">
           <div class="cell name">
-            <span class="chev">${collapsed ? '&#9656;' : '&#9662;'}</span>
+            <span class="chev">${collapsed ? '+' : '-'}</span>
             <div class="name-stack">
               <span class="pname" title="${esc(g.name)}">${esc(g.name)}</span>
               <span class="pid">${srcBadge} <span class="pid-label">${pidLabel}</span></span>
@@ -286,7 +304,7 @@ function render() {
           <div class="cell pathcell">${pathCell}</div>
           <div class="cell act">
             ${folderBtn}
-            <button class="btn kill" data-kill="${esc(g.key)}" ${busy ? 'disabled' : ''}>${busy ? 'Killing...' : 'Kill'}</button>
+            ${actionBtn}
           </div>
         </div>
         ${!collapsed ? `
@@ -299,7 +317,7 @@ function render() {
   }).join('');
 
   const total = gs.reduce((n, g) => n + g.pids.length, 0);
-  countEl.textContent = `${gs.length} programs \u00b7 ${total} processes`;
+  countEl.textContent = `${gs.length} programs // ${total} processes`;
 }
 
 function childRows(g) {
@@ -321,22 +339,22 @@ async function refresh() {
   if (state.loading) return;
   state.loading = true;
   refreshBtn.disabled = true;
-  refreshBtn.textContent = 'Scanning...';
+  refreshBtn.textContent = 'scanning...';
   try {
     const rows = await ListPorts();
     if (state.killing.size === 0) {
       state.rows = rows || [];
       state.lastUpdated = new Date();
-      updatedEl.textContent = `Updated ${state.lastUpdated.toLocaleTimeString()}`;
+      updatedEl.textContent = `updated ${state.lastUpdated.toLocaleTimeString()}`;
     }
     statusEl.textContent = '';
   } catch (e) {
-    statusEl.textContent = 'Scan failed';
-    toast('Scan failed: ' + (e && e.message ? e.message : e), true);
+    statusEl.textContent = 'scan failed';
+    toast('scan failed: ' + (e && e.message ? e.message : e), true);
   } finally {
     state.loading = false;
     refreshBtn.disabled = false;
-    refreshBtn.textContent = 'Refresh';
+    refreshBtn.textContent = 'refresh';
     render();
   }
 }
@@ -346,13 +364,13 @@ async function killGroup(key) {
   if (!g) return;
   const label = `${g.name}${g.source === 'wsl' ? ' (' + g.distro + ')' : ''}`;
   const detail = g.pids.length === 1 ? `PID ${g.pids[0]}` : `${g.pids.length} processes (${g.pids.join(', ')})`;
-  const confirmed = await confirmKill(`Kill "${label}"?`, `This will force-terminate ${detail}. The app will lose any unsaved work.`);
+  const confirmed = await confirmKill(`kill "${label}"?`, `this will force-terminate ${detail}. the app will lose any unsaved work.`);
   if (!confirmed) return;
 
   const pidKeys = g.pids.map(pid => `${g.source}|${g.distro}|${pid}`);
   for (const k of pidKeys) state.killing.add(k);
   render();
-  statusEl.textContent = `Killing ${g.name}...`;
+  statusEl.textContent = `killing ${g.name}...`;
 
   // Optimistic removal: drop the rows immediately so the UI reacts instantly.
   const killedKeys = new Set(g.pids.map(pid => rowKey(g.source, g.distro, pid)));
@@ -366,7 +384,7 @@ async function killGroup(key) {
       await KillProcess(g.source, g.distro, pid);
     } catch (e) {
       failed++;
-      toast(`Failed to kill PID ${pid}: ${e && e.message ? e.message : e}`, true);
+      toast(`failed to kill pid ${pid}: ${e && e.message ? e.message : e}`, true);
     }
   }
   for (const k of pidKeys) state.killing.delete(k);
@@ -376,7 +394,7 @@ async function killGroup(key) {
     state.rows.push(...removed);
     state.rows.sort((a, b) => a.source.localeCompare(b.source) || a.name.localeCompare(b.name));
   } else {
-    toast(`Killed ${label}`);
+    toast(`killed ${label}`);
   }
   statusEl.textContent = '';
   await refresh();
@@ -386,13 +404,37 @@ function rowKey(source, distro, pid) {
   return source === 'wsl' ? `wsl|${distro || ''}|${pid}` : `windows||${pid}`;
 }
 
+// stopContainerGroup gracefully stops a docker container (docker stop).
+async function stopContainerGroup(key) {
+  const g = groups().find(x => x.key === key);
+  if (!g || g.source !== 'docker') return;
+  const confirmed = await confirmKill(
+    `stop "${g.name}"?`,
+    `docker stop sends sigterm, then sigkill after the grace period. the container keeps its filesystem and can be restarted.`
+  );
+  if (!confirmed) return;
+
+  state.stopping.add(key);
+  statusEl.textContent = `stopping ${g.name}...`;
+  render();
+  try {
+    await StopContainer(g.containerId);
+    toast(`stopped ${g.name}`);
+  } catch (e) {
+    toast(`failed to stop ${g.name}: ${e && e.message ? e.message : e}`, true);
+  }
+  state.stopping.delete(key);
+  statusEl.textContent = '';
+  await refresh();
+}
+
 async function openFolder(key) {
   const g = groups().find(x => x.key === key);
   if (!g || !g.path) return;
   try {
     await OpenFolder(g.source, g.distro || '', g.path);
   } catch (e) {
-    toast('Could not open folder: ' + (e && e.message ? e.message : e), true);
+    toast('could not open folder: ' + (e && e.message ? e.message : e), true);
   }
 }
 
@@ -540,7 +582,7 @@ async function saveSettings() {
   state.closeAction = s.closeAction;
   state.startOnBoot = s.startOnBoot;
   autoBtn.classList.toggle('active', state.auto);
-  if (state.auto !== wasAuto) statusEl.textContent = state.auto ? 'Auto refresh on' : 'Auto refresh off';
+  if (state.auto !== wasAuto) statusEl.textContent = state.auto ? 'auto refresh on' : 'auto refresh off';
   closeModal();
   render();
 }
@@ -548,6 +590,8 @@ async function saveSettings() {
 listEl.addEventListener('click', e => {
   const killBtn = e.target.closest('button[data-kill]');
   if (killBtn) { killGroup(killBtn.dataset.kill); return; }
+  const stopBtn = e.target.closest('button[data-stop]');
+  if (stopBtn) { stopContainerGroup(stopBtn.dataset.stop); return; }
   const folderBtn = e.target.closest('button[data-folder]');
   if (folderBtn) { openFolder(folderBtn.dataset.folder); return; }
   const head = e.target.closest('[data-toggle]');
@@ -571,7 +615,7 @@ refreshBtn.addEventListener('click', refresh);
 autoBtn.addEventListener('click', () => {
   state.auto = !state.auto;
   autoBtn.classList.toggle('active', state.auto);
-  statusEl.textContent = state.auto ? 'Auto refresh on' : 'Auto refresh off';
+  statusEl.textContent = state.auto ? 'auto refresh on' : 'auto refresh off';
 });
 
 document.getElementById('settingsBtn').addEventListener('click', openSettings);

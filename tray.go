@@ -2,9 +2,10 @@ package main
 
 import (
 	_ "embed"
+	"runtime"
 
 	"fyne.io/systray"
-	"github.com/wailsapp/wails/v2/pkg/runtime"
+	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 // Windows tray icons must be ICO format (LoadImage rejects PNG). Wails
@@ -18,7 +19,14 @@ var iconData []byte
 var appQuit = make(chan struct{})
 
 func startTray(a *App) {
-	go systray.Run(func() { onTrayReady(a) }, nil)
+	go func() {
+		// systray's message pump has thread affinity on Windows: the window
+		// it creates and the GetMessage loop must stay on one OS thread.
+		// Without LockOSThread the goroutine can migrate and the tray icon
+		// goes dead (visible but ignores all clicks).
+		runtime.LockOSThread()
+		systray.Run(func() { onTrayReady(a) }, nil)
+	}()
 }
 
 func onTrayReady(a *App) {
@@ -29,8 +37,8 @@ func onTrayReady(a *App) {
 	// Left click (or double click) on the tray icon shows the window,
 	// no need to use the context menu.
 	systray.SetOnTapped(func() {
-		runtime.WindowShow(a.ctx)
-		runtime.WindowUnminimise(a.ctx)
+		wailsruntime.WindowShow(a.ctx)
+		wailsruntime.WindowUnminimise(a.ctx)
 	})
 
 	mShow := systray.AddMenuItem("Show Ports", "Show the Ports window")
@@ -41,10 +49,10 @@ func onTrayReady(a *App) {
 		for {
 			select {
 			case <-mShow.ClickedCh:
-				runtime.WindowShow(a.ctx)
+				wailsruntime.WindowShow(a.ctx)
 			case <-mQuit.ClickedCh:
 				systray.Quit()
-				runtime.Quit(a.ctx)
+				wailsruntime.Quit(a.ctx)
 				return
 			case <-appQuit:
 				systray.Quit()
@@ -57,5 +65,5 @@ func onTrayReady(a *App) {
 // quitApp performs a full application exit from the tray or close modal.
 func quitApp(a *App) {
 	close(appQuit)
-	runtime.Quit(a.ctx)
+	wailsruntime.Quit(a.ctx)
 }
